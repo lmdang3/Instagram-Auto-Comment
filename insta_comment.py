@@ -9,7 +9,6 @@ import pandas as pd
 import time
 import os
 from dotenv import load_dotenv
-
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 # Load the .env file into the environment so we can safely read credentials
 # without hardcoding them in the script
