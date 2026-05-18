@@ -1,63 +1,94 @@
 from instagrapi import Client
 import pandas as pd
-import numpy as np
-import matplotlib as mp
 import time
-import pprint
+import os
+from dotenv import load_dotenv
 
+# ── LOAD CREDENTIALS FROM .env ───────────────────────────────────────────────
+load_dotenv()
+USERNAME = os.getenv("INSTAGRAM_USERNAME")
+PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
+
+if not USERNAME or not PASSWORD:
+    raise ValueError("Missing credentials — make sure INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD are set in your .env file")
+
+TARGET_URL = "https://www.instagram.com/p/DYAmnyrBhll/"  # <-- paste your target post URL here
+
+DELAY_BETWEEN_COMMENTS = 30  # seconds to wait between comments (avoid bans)
+COMMENTED_LOG = "Commented_List.csv"
+USERNAME_LIST = "Instagram_List.csv"
+# ────────────────────────────────────────────────────────────────────────────
+
+def get_media_id_from_url(cl, url):
+    """Extract the media ID from an Instagram post/reel URL."""
+    media_pk = cl.media_pk_from_url(url)
+    return str(media_pk)
+
+def load_commented(log_file):
+    """Load the list of usernames already commented."""
+    try:
+        df = pd.read_csv(log_file)
+        return set(df["username"].astype(str).tolist())
+    except (FileNotFoundError, KeyError):
+        return set()
+
+def save_commented(log_file, username):
+    """Append a newly commented username to the log CSV."""
+    try:
+        df = pd.read_csv(log_file)
+    except (FileNotFoundError, KeyError):
+        df = pd.DataFrame(columns=["username"])
+    df.loc[len(df)] = [username]
+    df.to_csv(log_file, index=False, encoding="utf-8")
+
+# ── LOGIN ────────────────────────────────────────────────────────────────────
 cl = Client()
-cl.login("username", "password")
+try:
+    cl.login(USERNAME, PASSWORD)
+    print("✅ Logged in successfully\n")
+except Exception as e:
+    if "Two-factor" in str(e) or "two_factor" in str(e).lower():
+        verification_code = input("Enter your 2FA code from your authenticator app: ").strip()
+        cl.login(USERNAME, PASSWORD, verification_code=verification_code)
+        print("Logged in successfully with 2FA\n")
+    else:
+        raise
 
-find_value = 20
+# ── GET TARGET MEDIA ID ──────────────────────────────────────────────────────
+print(f"🔗 Fetching media ID for: {TARGET_URL}")
+media_id = get_media_id_from_url(cl, TARGET_URL)
+print(f"   Media ID: {media_id}\n")
 
-while True:
-    # List of Hashtags To Fetch
-    hashtag_list = ["barbie", "oppenheimer", "bariemovie", "barbiepink", "pinkbarbie", "oppenheimermovie"]
+# ── CONTINUOUS LOOP (press Ctrl+C to stop) ───────────────────────────────────
+print("Running continuously — press Ctrl+C to stop\n")
 
-    for hashtag in hashtag_list:
-        # Finding Top Hashtags Based on "find_value"
-        top_posts = cl.hashtag_medias_top(hashtag, find_value)
+try:
+    while True:
+        # Re-read both files each pass so new usernames added to the CSV are picked up
+        usernames_df = pd.read_csv(USERNAME_LIST)
+        all_usernames = usernames_df["Username"].dropna().astype(str).str.strip().tolist()
+        already_commented = load_commented(COMMENTED_LOG)
 
-        for i in range(0, len(top_posts)):
-            # Fetching the CSV File Used to store the Post Links
-            commented_posts = pd.read_csv('Commented_List.csv')
+        pending = [u for u in all_usernames if u not in already_commented]
+        print(f"Pass check: {len(all_usernames)} in list | {len(already_commented)} already commented | {len(pending)} pending\n")
 
-            # Itertating through the Results
-            first_comment = top_posts[i].dict()
+        if not pending:
+            print(f"All usernames have been commented. Checking again in {DELAY_BETWEEN_COMMENTS}s (add new usernames to {USERNAME_LIST} to continue)...")
+            time.sleep(DELAY_BETWEEN_COMMENTS)
+            continue
 
-            post_id = first_comment['id']
-            pprint.pprint(post_id)
+        for username in pending:
+            comment_text = f"@{username}"
+            print(f"Commenting: {comment_text}")
 
-            post_code = first_comment['code']
-            pprint.pprint(post_code)
+            try:
+                cl.media_comment(media_id, comment_text)
+                save_commented(COMMENTED_LOG, username)
+                print(f"   Done -- waiting {DELAY_BETWEEN_COMMENTS}s before next comment...")
+            except Exception as error:
+                print(f"   Failed to comment on @{username}: {error}")
 
-            post_url = "https://instagram.com/reel/" + post_code
-            print(post_url)
+            time.sleep(DELAY_BETWEEN_COMMENTS)
 
-            # Checking if Already Commented on the Post
-            is_present = post_id in commented_posts['post_id'].values
-
-            if  is_present == False:
-                print("New Post Found, Commenting..... \n")
-                # Using try and except beacuse certain posts have comment limit
-                try:
-                    comment = cl.media_comment(post_id, "Your comment goes here")
-                except Exception as error:
-                    print(error)
-
-                # Storing the Values in Commented_List.csv File
-                values = [hashtag, post_id, post_code, post_url]
-                print(values)
-
-                commented_posts.loc[len(commented_posts)] = values
-
-                commented_posts.to_csv("Commented_List.csv", index=False, encoding='utf-8')
-            else:
-                print("Post Already Found \n")
-
-    # Increase the time inorder to not get temporary ban
-    print("Checking For New Posts in 5 Seconds....")
-    time.sleep(5)
-
-
-
+except KeyboardInterrupt:
+    print("\nStopped by user. Goodbye!")
